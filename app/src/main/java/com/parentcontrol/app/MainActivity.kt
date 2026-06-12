@@ -6,6 +6,7 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -33,10 +34,22 @@ class MainActivity : AppCompatActivity() {
             if (checkPermissions()) {
                 startMonitoringService()
                 activateDeviceAdmin()
+                checkNotificationPermission()
                 statusText.text = "✅ Monitoring Active"
             } else {
                 requestPermissions()
             }
+        }
+    }
+
+    private fun checkNotificationPermission() {
+        val enabledListeners = Settings.Secure.getString(
+            contentResolver,
+            "enabled_notification_listeners"
+        )
+        val componentName = ComponentName(this, NotificationListener::class.java).flattenToString()
+        if (enabledListeners == null || !enabledListeners.contains(componentName)) {
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
         }
     }
 
@@ -77,6 +90,7 @@ class MainActivity : AppCompatActivity() {
         if (requestCode == PERMISSION_CODE && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
             startMonitoringService()
             activateDeviceAdmin()
+            checkNotificationPermission()
         }
     }
 }
