@@ -19,7 +19,6 @@ class FirebaseReceiver : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
-        // Token server pe bhejo
         Thread {
             try {
                 val client = OkHttpClient()
