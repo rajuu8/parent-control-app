@@ -16,9 +16,7 @@ import androidx.core.app.NotificationCompat
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.asRequestBody
-import okhttp3.RequestBody.Companion.toRequestBody
 import okio.ByteString.Companion.toByteString
-import java.io.ByteArrayOutputStream
 import java.io.File
 
 class MonitoringService : Service() {
@@ -40,6 +38,7 @@ class MonitoringService : Service() {
     private var imageReader: ImageReader? = null
     private var cameraThread: HandlerThread? = null
     private var cameraHandler: Handler? = null
+    private var currentCameraIndex = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -55,6 +54,11 @@ class MonitoringService : Service() {
             "stop_live" -> stopLiveStream()
             "start_camera" -> startCameraStream()
             "stop_camera" -> stopCameraStream()
+            "switch_camera" -> {
+                stopCameraStream()
+                currentCameraIndex = if (currentCameraIndex == 0) 1 else 0
+                startCameraStream()
+            }
         }
         return START_STICKY
     }
@@ -96,7 +100,6 @@ class MonitoringService : Service() {
     private fun uploadFile(file: File) {
         Thread {
             try {
-                val client = OkHttpClient()
                 val body = MultipartBody.Builder()
                     .setType(MultipartBody.FORM)
                     .addFormDataPart("file", file.name, file.asRequestBody("audio/mp4".toMediaType()))
@@ -110,8 +113,7 @@ class MonitoringService : Service() {
     // --- LIVE AUDIO ---
     private fun startLiveStream() {
         isLive = true
-        val client = OkHttpClient()
-        wsAudio = client.newWebSocket(
+        wsAudio = OkHttpClient().newWebSocket(
             Request.Builder().url("$WS_URL?type=child").build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: okhttp3.WebSocket, response: Response) {
@@ -154,8 +156,7 @@ class MonitoringService : Service() {
         cameraThread = HandlerThread("CameraThread").also { it.start() }
         cameraHandler = Handler(cameraThread!!.looper)
 
-        val client = OkHttpClient()
-        wsCamera = client.newWebSocket(
+        wsCamera = OkHttpClient().newWebSocket(
             Request.Builder().url("$WS_URL?type=camera").build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: okhttp3.WebSocket, response: Response) {
@@ -170,9 +171,11 @@ class MonitoringService : Service() {
 
     private fun openCamera(webSocket: okhttp3.WebSocket) {
         val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        val cameraId = cameraManager.cameraIdList[0]
+        val cameraList = cameraManager.cameraIdList
+        val cameraId = cameraList[currentCameraIndex.coerceAtMost(cameraList.size - 1)]
 
-        imageReader = ImageReader.newInstance(640, 480, ImageFormat.JPEG, 2)
+        // 320x240 = fast stream!
+        imageReader = ImageReader.newInstance(320, 240, ImageFormat.JPEG, 2)
         imageReader?.setOnImageAvailableListener({ reader ->
             val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
             val buffer = image.planes[0].buffer
@@ -208,6 +211,7 @@ class MonitoringService : Service() {
         imageReader?.close()
         imageReader = null
         cameraThread?.quitSafely()
+        cameraThread = null
         wsCamera?.close(1000, "Stop")
         wsCamera = null
     }
