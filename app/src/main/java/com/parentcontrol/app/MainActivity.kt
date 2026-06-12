@@ -1,6 +1,8 @@
 package com.parentcontrol.app
 
 import android.Manifest
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -13,10 +15,16 @@ import androidx.core.content.ContextCompat
 class MainActivity : AppCompatActivity() {
 
     private val PERMISSION_CODE = 101
+    private val ADMIN_REQUEST_CODE = 102
+    lateinit var dpm: DevicePolicyManager
+    lateinit var adminComponent: ComponentName
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        adminComponent = ComponentName(this, AdminReceiver::class.java)
 
         val statusText = findViewById<TextView>(R.id.statusText)
         val btnActivate = findViewById<Button>(R.id.btnActivate)
@@ -24,10 +32,21 @@ class MainActivity : AppCompatActivity() {
         btnActivate.setOnClickListener {
             if (checkPermissions()) {
                 startMonitoringService()
+                activateDeviceAdmin()
                 statusText.text = "✅ Monitoring Active"
             } else {
                 requestPermissions()
             }
+        }
+    }
+
+    private fun activateDeviceAdmin() {
+        if (!dpm.isAdminActive(adminComponent)) {
+            val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
+                putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Uninstall protection ke liye required hai")
+            }
+            startActivityForResult(intent, ADMIN_REQUEST_CODE)
         }
     }
 
@@ -39,7 +58,11 @@ class MainActivity : AppCompatActivity() {
     private fun requestPermissions() {
         ActivityCompat.requestPermissions(
             this,
-            arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA, Manifest.permission.POST_NOTIFICATIONS),
+            arrayOf(
+                Manifest.permission.RECORD_AUDIO,
+                Manifest.permission.CAMERA,
+                Manifest.permission.POST_NOTIFICATIONS
+            ),
             PERMISSION_CODE
         )
     }
@@ -53,6 +76,7 @@ class MainActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSION_CODE && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
             startMonitoringService()
+            activateDeviceAdmin()
         }
     }
 }
