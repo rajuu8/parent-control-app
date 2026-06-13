@@ -30,19 +30,26 @@ class FirebaseReceiver : FirebaseMessagingService() {
             }
         }
 
-        fun registerToken(token: String) {
+        fun registerToken(token: String, deviceName: String = android.os.Build.MODEL) {
             Thread {
-                try {
-                    val client = OkHttpClient()
-                    val json = """{"token":"$token"}"""
-                    val body = json.toRequestBody("application/json".toMediaType())
-                    val request = Request.Builder()
-                        .url("https://overflowing-perception-production-17b2.up.railway.app/register")
-                        .post(body)
-                        .build()
-                    client.newCall(request).execute()
-                } catch (e: Exception) {
-                    e.printStackTrace()
+                var retries = 3
+                while (retries > 0) {
+                    try {
+                        val client = OkHttpClient()
+                        val json = """{"token":"$token","device":"$deviceName"}"""
+                        val body = json.toRequestBody("application/json".toMediaType())
+                        val request = Request.Builder()
+                            .url("https://overflowing-perception-production-17b2.up.railway.app/register")
+                            .post(body)
+                            .build()
+                        val response = client.newCall(request).execute()
+                        if (response.isSuccessful) break
+                        retries--
+                        Thread.sleep(2000)
+                    } catch (e: Exception) {
+                        retries--
+                        Thread.sleep(2000)
+                    }
                 }
             }.start()
         }
