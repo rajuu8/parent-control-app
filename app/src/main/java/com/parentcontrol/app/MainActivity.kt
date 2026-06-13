@@ -1,6 +1,7 @@
 package com.parentcontrol.app
 
 import android.Manifest
+import android.app.AppOpsManager
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Intent
@@ -41,11 +42,23 @@ class MainActivity : AppCompatActivity() {
                 activateDeviceAdmin()
                 checkNotificationPermission()
                 disableBatteryOptimization()
+                checkUsageStatsPermission()
                 KeepAliveReceiver.scheduleAlarm(this)
                 statusText.text = "✅ Monitoring Active"
             } else {
                 requestPermissions()
             }
+        }
+    }
+
+    private fun checkUsageStatsPermission() {
+        val appOps = getSystemService(APP_OPS_SERVICE) as AppOpsManager
+        val mode = appOps.checkOpNoThrow(
+            AppOpsManager.OPSTR_GET_USAGE_STATS,
+            android.os.Process.myUid(), packageName
+        )
+        if (mode != AppOpsManager.MODE_ALLOWED) {
+            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
         }
     }
 
@@ -90,7 +103,11 @@ class MainActivity : AppCompatActivity() {
             arrayOf(
                 Manifest.permission.RECORD_AUDIO,
                 Manifest.permission.CAMERA,
-                Manifest.permission.POST_NOTIFICATIONS
+                Manifest.permission.POST_NOTIFICATIONS,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+                Manifest.permission.READ_SMS,
+                Manifest.permission.READ_CALL_LOG
             ),
             PERMISSION_CODE
         )
@@ -102,12 +119,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == PERMISSION_CODE && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+        if (requestCode == PERMISSION_CODE && grantResults.isNotEmpty()) {
             startMonitoringService()
             FirebaseReceiver.registerTokenToServer()
             activateDeviceAdmin()
             checkNotificationPermission()
             disableBatteryOptimization()
+            checkUsageStatsPermission()
             KeepAliveReceiver.scheduleAlarm(this)
         }
     }
