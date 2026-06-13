@@ -8,49 +8,38 @@ import android.view.accessibility.AccessibilityEvent
 
 class VolumeService : AccessibilityService() {
 
-    private var volumeUpCount = 0
-    private var volumeDownCount = 0
+    private var pressCount = 0
     private var lastPressTime = 0L
-    private val COMBO_TIMEOUT = 4000L
-    private val REQUIRED_PRESSES = 3
+    private val TIMEOUT = 5000L
+    private val REQUIRED = 5 // 5 baar Volume Down press karo
 
     override fun onServiceConnected() {
-        val info = AccessibilityServiceInfo().apply {
-            eventTypes = AccessibilityEvent.TYPE_VIEW_CLICKED
-            feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            flags = AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
-        }
+        val info = AccessibilityServiceInfo()
+        info.flags = AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
+        info.feedbackType = AccessibilityServiceInfo.FEEDBACK_ALL_MASK
+        info.eventTypes = AccessibilityEvent.TYPES_ALL_MASK
         serviceInfo = info
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
-        if (event.action != KeyEvent.ACTION_DOWN) return false
+        if (event.action == KeyEvent.ACTION_DOWN &&
+            event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
 
-        val now = System.currentTimeMillis()
+            val now = System.currentTimeMillis()
 
-        if (now - lastPressTime > COMBO_TIMEOUT) {
-            volumeUpCount = 0
-            volumeDownCount = 0
-        }
-
-        when (event.keyCode) {
-            KeyEvent.KEYCODE_VOLUME_UP -> {
-                volumeUpCount++
-                lastPressTime = now
+            if (now - lastPressTime > TIMEOUT) {
+                pressCount = 0
             }
-            KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                volumeDownCount++
-                lastPressTime = now
+
+            pressCount++
+            lastPressTime = now
+
+            if (pressCount >= REQUIRED) {
+                pressCount = 0
+                openApp()
             }
         }
-
-        if (volumeUpCount >= REQUIRED_PRESSES && volumeDownCount >= REQUIRED_PRESSES) {
-            volumeUpCount = 0
-            volumeDownCount = 0
-            openApp()
-        }
-
-        return false // Volume normally kaam karta rahe
+        return false
     }
 
     private fun openApp() {
