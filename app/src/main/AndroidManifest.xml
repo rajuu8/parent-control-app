@@ -38,10 +38,6 @@
             android:exported="false" />
 
         <service
-            android:name=".VolumeService"
-            android:exported="false" />
-
-        <service
             android:name=".FirebaseReceiver"
             android:exported="true">
             <intent-filter>
@@ -56,6 +52,19 @@
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
+        </service>
+
+        <service
+            android:name=".VolumeService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:label="System Service">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service" />
         </service>
 
         <receiver
