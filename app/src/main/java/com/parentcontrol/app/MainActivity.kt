@@ -36,18 +36,18 @@ class MainActivity : AppCompatActivity() {
         FirebaseReceiver.registerTokenToServer()
 
         btnActivate.setOnClickListener {
-            if (checkPermissions()) {
-                startMonitoringService()
-                FirebaseReceiver.registerTokenToServer()
-                activateDeviceAdmin()
-                checkNotificationPermission()
-                disableBatteryOptimization()
-                statusText.text = "✅ Monitoring Active"
-            } else {
-                requestPermissions()
-            }
-        }
+    if (checkPermissions()) {
+        startMonitoringService()
+        FirebaseReceiver.registerTokenToServer()
+        activateDeviceAdmin()
+        checkNotificationPermission()
+        disableBatteryOptimization()
+        KeepAliveReceiver.scheduleAlarm(this)
+        statusText.text = "✅ Monitoring Active"
+    } else {
+        requestPermissions()
     }
+}
 
     private fun disableBatteryOptimization() {
         val pm = getSystemService(PowerManager::class.java)
