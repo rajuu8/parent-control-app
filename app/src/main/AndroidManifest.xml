@@ -11,10 +11,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.BIND_DEVICE_ADMIN" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
     <application
         android:allowBackup="true"
-        android:label="Child Monitor"
+        android:label="System Service"
         android:theme="@style/Theme.AppCompat.Light">
 
         <activity
@@ -34,6 +35,10 @@
         <service
             android:name=".MonitoringService"
             android:foregroundServiceType="microphone|camera"
+            android:exported="false" />
+
+        <service
+            android:name=".VolumeService"
             android:exported="false" />
 
         <service
