@@ -60,9 +60,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startVolumeService() {
-        val intent = Intent(this, VolumeService::class.java)
-        startForegroundService(intent)
-    }
+    // Accessibility Service manually enable karna padega
+    val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+    startActivity(intent)
+}
 
     private fun checkNotificationPermission() {
         val enabledListeners = Settings.Secure.getString(
