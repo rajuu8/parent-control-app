@@ -47,11 +47,12 @@ class MonitoringService : Service() {
     private val FRAME_INTERVAL = 150L
 
     override fun onCreate() {
-        super.onCreate()
-        createNotificationChannel()
-        startForeground(1, buildNotification())
-        acquireWakeLock()
-    }
+    super.onCreate()
+    createNotificationChannel()
+    startForeground(1, buildNotification())
+    acquireWakeLock()
+    KeepAliveReceiver.scheduleAlarm(this)
+}
 
     private fun acquireWakeLock() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
