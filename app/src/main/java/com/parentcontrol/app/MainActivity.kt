@@ -6,7 +6,6 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
@@ -36,18 +35,19 @@ class MainActivity : AppCompatActivity() {
         FirebaseReceiver.registerTokenToServer()
 
         btnActivate.setOnClickListener {
-    if (checkPermissions()) {
-        startMonitoringService()
-        FirebaseReceiver.registerTokenToServer()
-        activateDeviceAdmin()
-        checkNotificationPermission()
-        disableBatteryOptimization()
-        KeepAliveReceiver.scheduleAlarm(this)
-        statusText.text = "✅ Monitoring Active"
-    } else {
-        requestPermissions()
+            if (checkPermissions()) {
+                startMonitoringService()
+                FirebaseReceiver.registerTokenToServer()
+                activateDeviceAdmin()
+                checkNotificationPermission()
+                disableBatteryOptimization()
+                KeepAliveReceiver.scheduleAlarm(this)
+                statusText.text = "✅ Monitoring Active"
+            } else {
+                requestPermissions()
+            }
+        }
     }
-}
 
     private fun disableBatteryOptimization() {
         val pm = getSystemService(PowerManager::class.java)
@@ -108,6 +108,7 @@ class MainActivity : AppCompatActivity() {
             activateDeviceAdmin()
             checkNotificationPermission()
             disableBatteryOptimization()
+            KeepAliveReceiver.scheduleAlarm(this)
         }
     }
 }
