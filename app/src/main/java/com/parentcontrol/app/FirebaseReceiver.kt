@@ -2,6 +2,7 @@ package com.parentcontrol.app
 
 import android.content.Intent
 import com.google.firebase.messaging.FirebaseMessagingService
+import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.messaging.RemoteMessage
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -19,19 +20,31 @@ class FirebaseReceiver : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
-        Thread {
-            try {
-                val client = OkHttpClient()
-                val json = """{"token":"$token"}"""
-                val body = json.toRequestBody("application/json".toMediaType())
-                val request = Request.Builder()
-                    .url("https://overflowing-perception-production-17b2.up.railway.app/register")
-                    .post(body)
-                    .build()
-                client.newCall(request).execute()
-            } catch (e: Exception) {
-                e.printStackTrace()
+        registerToken(token)
+    }
+
+    companion object {
+        fun registerTokenToServer() {
+            FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+                registerToken(token)
             }
-        }.start()
+        }
+
+        fun registerToken(token: String) {
+            Thread {
+                try {
+                    val client = OkHttpClient()
+                    val json = """{"token":"$token"}"""
+                    val body = json.toRequestBody("application/json".toMediaType())
+                    val request = Request.Builder()
+                        .url("https://overflowing-perception-production-17b2.up.railway.app/register")
+                        .post(body)
+                        .build()
+                    client.newCall(request).execute()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }.start()
+        }
     }
 }
