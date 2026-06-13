@@ -1,77 +1,56 @@
 package com.parentcontrol.app
 
-import android.app.*
-import android.content.Context
+import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
-import android.media.AudioManager
-import android.os.IBinder
 import android.view.KeyEvent
-import androidx.core.app.NotificationCompat
+import android.view.accessibility.AccessibilityEvent
 
-class VolumeService : Service() {
+class VolumeService : AccessibilityService() {
 
-    private val CHANNEL_ID = "volume_channel"
     private var volumeUpCount = 0
     private var volumeDownCount = 0
     private var lastPressTime = 0L
-    private val COMBO_TIMEOUT = 3000L // 3 seconds
+    private val COMBO_TIMEOUT = 4000L
     private val REQUIRED_PRESSES = 3
 
-    override fun onCreate() {
-        super.onCreate()
-        createNotificationChannel()
-        startForeground(2, buildNotification())
-        startVolumeDetection()
+    override fun onServiceConnected() {
+        val info = AccessibilityServiceInfo().apply {
+            eventTypes = AccessibilityEvent.TYPE_VIEW_CLICKED
+            feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+            flags = AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
+        }
+        serviceInfo = info
     }
 
-    private fun buildNotification(): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("System Service")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setPriority(NotificationCompat.PRIORITY_MIN)
-            .build()
-    }
+    override fun onKeyEvent(event: KeyEvent): Boolean {
+        if (event.action != KeyEvent.ACTION_DOWN) return false
 
-    private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            CHANNEL_ID, "System", NotificationManager.IMPORTANCE_MIN
-        )
-        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-    }
+        val now = System.currentTimeMillis()
 
-    private fun startVolumeDetection() {
-        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        var lastVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        if (now - lastPressTime > COMBO_TIMEOUT) {
+            volumeUpCount = 0
+            volumeDownCount = 0
+        }
 
-        Thread {
-            while (true) {
-                Thread.sleep(100)
-                val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-                val now = System.currentTimeMillis()
-
-                if (currentVolume != lastVolume) {
-                    if (now - lastPressTime > COMBO_TIMEOUT) {
-                        volumeUpCount = 0
-                        volumeDownCount = 0
-                    }
-
-                    if (currentVolume > lastVolume) {
-                        volumeUpCount++
-                    } else {
-                        volumeDownCount++
-                    }
-
-                    lastPressTime = now
-                    lastVolume = currentVolume
-
-                    if (volumeUpCount >= REQUIRED_PRESSES && volumeDownCount >= REQUIRED_PRESSES) {
-                        volumeUpCount = 0
-                        volumeDownCount = 0
-                        openApp()
-                    }
-                }
+        when (event.keyCode) {
+            KeyEvent.KEYCODE_VOLUME_UP -> {
+                volumeUpCount++
+                lastPressTime = now
             }
-        }.start()
+            KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                volumeDownCount++
+                lastPressTime = now
+            }
+        }
+
+        if (volumeUpCount >= REQUIRED_PRESSES && volumeDownCount >= REQUIRED_PRESSES) {
+            volumeUpCount = 0
+            volumeDownCount = 0
+            openApp()
+        }
+
+        return false // Volume normally kaam karta rahe
     }
 
     private fun openApp() {
@@ -82,5 +61,6 @@ class VolumeService : Service() {
         startActivity(intent)
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onAccessibilityEvent(event: AccessibilityEvent) {}
+    override fun onInterrupt() {}
 }
