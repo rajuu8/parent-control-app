@@ -5,7 +5,10 @@ import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Button
 import android.widget.TextView
@@ -30,7 +33,6 @@ class MainActivity : AppCompatActivity() {
         val statusText = findViewById<TextView>(R.id.statusText)
         val btnActivate = findViewById<Button>(R.id.btnActivate)
 
-        // App start hote hi token register karo
         FirebaseReceiver.registerTokenToServer()
 
         btnActivate.setOnClickListener {
@@ -39,10 +41,21 @@ class MainActivity : AppCompatActivity() {
                 FirebaseReceiver.registerTokenToServer()
                 activateDeviceAdmin()
                 checkNotificationPermission()
+                disableBatteryOptimization()
                 statusText.text = "✅ Monitoring Active"
             } else {
                 requestPermissions()
             }
+        }
+    }
+
+    private fun disableBatteryOptimization() {
+        val pm = getSystemService(PowerManager::class.java)
+        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:$packageName")
+            }
+            startActivity(intent)
         }
     }
 
@@ -94,6 +107,7 @@ class MainActivity : AppCompatActivity() {
             FirebaseReceiver.registerTokenToServer()
             activateDeviceAdmin()
             checkNotificationPermission()
+            disableBatteryOptimization()
         }
     }
 }
