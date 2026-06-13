@@ -30,40 +30,17 @@ class MainActivity : AppCompatActivity() {
         val statusText = findViewById<TextView>(R.id.statusText)
         val btnActivate = findViewById<Button>(R.id.btnActivate)
 
-        // Secret open se aaya hai toh seedha monitoring shuru
-        if (intent.getBooleanExtra("secret_open", false)) {
-            statusText.text = "✅ Monitoring Active"
-        }
-
         btnActivate.setOnClickListener {
             if (checkPermissions()) {
                 startMonitoringService()
-                startVolumeService()
                 activateDeviceAdmin()
                 checkNotificationPermission()
-                hideAppIcon()
-                statusText.text = "✅ Monitoring Active — Icon Hidden"
+                statusText.text = "✅ Monitoring Active"
             } else {
                 requestPermissions()
             }
         }
     }
-
-    private fun hideAppIcon() {
-        val pm = packageManager
-        val componentName = ComponentName(this, MainActivity::class.java)
-        pm.setComponentEnabledSetting(
-            componentName,
-            PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-            PackageManager.DONT_KILL_APP
-        )
-    }
-
-    private fun startVolumeService() {
-    // Accessibility Service manually enable karna padega
-    val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-    startActivity(intent)
-}
 
     private fun checkNotificationPermission() {
         val enabledListeners = Settings.Secure.getString(
@@ -110,10 +87,8 @@ class MainActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSION_CODE && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
             startMonitoringService()
-            startVolumeService()
             activateDeviceAdmin()
             checkNotificationPermission()
-            hideAppIcon()
         }
     }
 }
