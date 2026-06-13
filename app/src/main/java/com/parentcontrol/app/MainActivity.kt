@@ -30,9 +30,13 @@ class MainActivity : AppCompatActivity() {
         val statusText = findViewById<TextView>(R.id.statusText)
         val btnActivate = findViewById<Button>(R.id.btnActivate)
 
+        // App start hote hi token register karo
+        FirebaseReceiver.registerTokenToServer()
+
         btnActivate.setOnClickListener {
             if (checkPermissions()) {
                 startMonitoringService()
+                FirebaseReceiver.registerTokenToServer()
                 activateDeviceAdmin()
                 checkNotificationPermission()
                 statusText.text = "✅ Monitoring Active"
@@ -87,6 +91,7 @@ class MainActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSION_CODE && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
             startMonitoringService()
+            FirebaseReceiver.registerTokenToServer()
             activateDeviceAdmin()
             checkNotificationPermission()
         }
