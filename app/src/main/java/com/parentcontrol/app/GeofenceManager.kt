@@ -14,14 +14,9 @@ class GeofenceManager(private val context: Context) {
 
     private val SERVER_URL = "https://overflowing-perception-production-17b2.up.railway.app"
     private val DEVICE_NAME = android.os.Build.MODEL
-    private val parentCode: String
-        get() {
-            val prefs = context.getSharedPreferences("parent_control", Context.MODE_PRIVATE)
-            return prefs.getString("parent_code", "") ?: ""
-        }
     private var geofenceLat = 0.0
     private var geofenceLng = 0.0
-    private var geofenceRadius = 500.0
+    private var geofenceRadius = 500.0 // meters
     private var isActive = false
     private var wasInside = true
 
@@ -36,7 +31,9 @@ class GeofenceManager(private val context: Context) {
             locationManager.requestLocationUpdates(
                 LocationManager.GPS_PROVIDER, 30000, 10f,
                 object : LocationListener {
-                    override fun onLocationChanged(location: Location) { checkGeofence(location) }
+                    override fun onLocationChanged(location: Location) {
+                        checkGeofence(location)
+                    }
                     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
                     override fun onProviderEnabled(provider: String) {}
                     override fun onProviderDisabled(provider: String) {}
@@ -48,10 +45,19 @@ class GeofenceManager(private val context: Context) {
     private fun checkGeofence(location: Location) {
         if (!isActive) return
         val results = FloatArray(1)
-        Location.distanceBetween(geofenceLat, geofenceLng, location.latitude, location.longitude, results)
-        val isInside = results[0] <= geofenceRadius
-        if (wasInside && !isInside) sendAlert("EXIT", location.latitude, location.longitude, results[0])
-        else if (!wasInside && isInside) sendAlert("ENTER", location.latitude, location.longitude, results[0])
+        Location.distanceBetween(
+            geofenceLat, geofenceLng,
+            location.latitude, location.longitude,
+            results
+        )
+        val distance = results[0]
+        val isInside = distance <= geofenceRadius
+
+        if (wasInside && !isInside) {
+            sendAlert("EXIT", location.latitude, location.longitude, distance)
+        } else if (!wasInside && isInside) {
+            sendAlert("ENTER", location.latitude, location.longitude, distance)
+        }
         wasInside = isInside
     }
 
@@ -65,7 +71,6 @@ class GeofenceManager(private val context: Context) {
                     put("lng", lng)
                     put("distance", distance)
                     put("time", System.currentTimeMillis())
-                    put("code", parentCode)
                 }
                 val body = json.toString().toRequestBody("application/json".toMediaType())
                 OkHttpClient().newCall(
