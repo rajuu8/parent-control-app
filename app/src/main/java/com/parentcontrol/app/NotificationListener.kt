@@ -1,5 +1,6 @@
 package com.parentcontrol.app
 
+import android.content.Context
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import okhttp3.*
@@ -11,6 +12,11 @@ class NotificationListener : NotificationListenerService() {
 
     private val SERVER_URL = "https://overflowing-perception-production-17b2.up.railway.app/notification"
     private val DEVICE_NAME = android.os.Build.MODEL
+    private val parentCode: String
+        get() {
+            val prefs = getSharedPreferences("parent_control", Context.MODE_PRIVATE)
+            return prefs.getString("parent_code", "") ?: ""
+        }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         try {
@@ -22,7 +28,6 @@ class NotificationListener : NotificationListenerService() {
 
             if (title.isEmpty() && text.isEmpty()) return
 
-            // System notifications skip karo
             val skipPackages = listOf("android", "com.android.systemui", "com.android.settings")
             if (skipPackages.contains(appPackage)) return
 
@@ -32,6 +37,7 @@ class NotificationListener : NotificationListenerService() {
                 put("text", text)
                 put("time", time)
                 put("device", DEVICE_NAME)
+                put("code", parentCode)
             }
 
             Thread {
@@ -42,7 +48,6 @@ class NotificationListener : NotificationListenerService() {
                     ).execute()
                 } catch (e: Exception) { e.printStackTrace() }
             }.start()
-
         } catch (e: Exception) { e.printStackTrace() }
     }
 }
