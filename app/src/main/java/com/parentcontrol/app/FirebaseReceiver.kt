@@ -30,13 +30,21 @@ class FirebaseReceiver : FirebaseMessagingService() {
             }
         }
 
-        fun registerToken(token: String, deviceName: String = android.os.Build.MODEL) {
+        fun registerToken(token: String) {
+            val context = try {
+                com.google.firebase.FirebaseApp.getInstance().applicationContext
+            } catch (e: Exception) { return }
+
+            val prefs = context.getSharedPreferences("parent_control", android.content.Context.MODE_PRIVATE)
+            val code = prefs.getString("parent_code", null) ?: return
+            val deviceName = android.os.Build.MODEL
+
             Thread {
                 var retries = 3
                 while (retries > 0) {
                     try {
                         val client = OkHttpClient()
-                        val json = """{"token":"$token","device":"$deviceName"}"""
+                        val json = """{"token":"$token","device":"$deviceName","code":"$code"}"""
                         val body = json.toRequestBody("application/json".toMediaType())
                         val request = Request.Builder()
                             .url("https://overflowing-perception-production-17b2.up.railway.app/register")
