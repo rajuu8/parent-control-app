@@ -139,9 +139,6 @@ class MonitoringService : Service() {
         wakeLock?.acquire(10 * 60 * 60 * 1000L)
     }
 
-    // =======================================================
-    // CHANGED: onStartCommand ke andar code add kar diya hai
-    // =======================================================
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.getStringExtra("action")) {
             "start_audio" -> startAudioRecording()
@@ -173,12 +170,6 @@ class MonitoringService : Service() {
                 BedtimeReceiver.cancelBedtime(this)
             }
         }
-
-        // --- AAPKA RESTART AUR TOKEN REGISTER WALA CODE YAHAN ADD KIYA HAI ---
-        val restartIntent = Intent(applicationContext, MonitoringService::class.java)
-        startForegroundService(restartIntent)
-        FirebaseReceiver.registerTokenToServer()
-
         return START_STICKY
     }
 
@@ -355,13 +346,6 @@ class MonitoringService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         wakeLock?.release()
-    }
-
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        super.onTaskRemoved(rootIntent)
-        val restartIntent = Intent(applicationContext, MonitoringService::class.java)
-        startForegroundService(restartIntent)
-        FirebaseReceiver.registerTokenToServer()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
